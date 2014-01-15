@@ -1,4 +1,3 @@
-<!doctype html>
 <html>
   <head>
     <meta charset="utf-8">
@@ -9,6 +8,7 @@
     <script src="codemirror/matchbrackets.js"></script>
     <script src="store.js"></script>
     <script src="webchurch.js"></script>
+    <script src="viz.js"></script>
     <!-- <link rel="stylesheet" href="codemirror/docs.css"> -->
     <style type="text/css">.CodeMirror {border-top: 1px solid black; border-bottom: 1px solid black;}</style>
   </head>
@@ -52,6 +52,7 @@
       //         require("./tokenize").tokenize(church))))
       // }
       var evaluate = require("./evaluate").evaluate
+      var analyze = require("./evaluate").analyze
       var church_builtins = require("./church_builtins")
 
       function __updateJSOutput(str)
@@ -106,11 +107,46 @@
           __updateExecOutput(JSON.stringify(e.message))
         }
       }
-      
+
+      function __analyzeCode()
+      {
+        var church_code = editor.getValue()
+        store.set('code', church_code);
+        try
+        {
+             var d1 = new Date()
+             var res = analyze(church_code)
+             var d2 = new Date()
+             console.log("Analysis time: " + (d2.getTime() - d1.getTime()) / 1000)
+
+//             __updateExecOutput(res)
+//             return
+
+             graph = res       
+             var svg = Viz(graph.toDot(), "svg");
+             document.getElementById("graph_output").innerHTML = svg
+        }
+        catch (e)
+        {
+throw e
+          __updateExecOutput(JSON.stringify(e.message))
+        }
+      }
+
+      var graph
+
+      function __showState(id) {
+        document.getElementById("state_output").innerHTML = graph.stateToHTML(id)
+      }
+
     </script>
 
     <button style="margin-top: 10px; font-size: 14pt" onclick="__runCode()">
       Run
+    </button>
+
+    <button style="margin-top: 10px; font-size: 14pt" onclick="__analyzeCode()">
+      Analyze
     </button>
 
     <div>
@@ -118,6 +154,8 @@
     <h3>Output:</h3>
     <div id="js_output"></div>
     <div id="exec_output"></div>
+    <div id="graph_output"></div>
+    <div id="state_output"></div>
     <button id="clearBtn" style="margin-top: 10px; font-size: 14pt; display: none" onclick="__clearOutput()">
       Clear
     </button>

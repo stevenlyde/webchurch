@@ -11,6 +11,8 @@ var transform = require('./probabilistic/transform')
 var wctransform = require('./wctransform')
 var util = require('./util.js');
 
+var cfa = require('./church-pdcfa.js');
+var normalizer = require('./anormalize.js');
 
 
 // Note: escodegen zero-indexes columns, while JS evaluators and the Church
@@ -50,6 +52,19 @@ function get_sites_from_stack(split_stack) {
 		}
 	}
 	return sites;
+}
+
+function analyze(church_codestring) {
+	var tokens = tokenize(church_codestring);
+	var church_ast = church_astify(tokens);
+//	return JSON.stringify(church_ast);
+
+        var exp = normalizer.normalize(church_ast);
+//	return JSON.stringify(exp);
+
+	var dsg = cfa.generateDSG(exp);
+
+	return dsg;
 }
 
 function evaluate(church_codestring,precomp) {
@@ -156,5 +171,6 @@ function evaluate(church_codestring,precomp) {
 
 module.exports = {
 evaluate: evaluate,
+analyze: analyze,
 format_result: util.format_result
 };

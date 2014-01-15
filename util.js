@@ -68,6 +68,7 @@ module.exports = {
 	is_leaf: is_leaf,
 	boolean_aliases: boolean_aliases,
 	is_string: is_string,
+        is_number: is_number,
 	is_identifier: is_identifier,
 
 	make_church_error: make_church_error,
