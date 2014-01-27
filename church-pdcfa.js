@@ -279,7 +279,7 @@ function AbstractBoolean(value) {
 AbstractBoolean.prototype = Object.create(AbstractValue.prototype)
 
 AbstractBoolean.prototype.toString = function() {
-  return this ? "True" : "False"
+  return this.value ? "True" : "False"
 }
 
 AbstractBoolean.prototype.equals = function(other) {
@@ -471,7 +471,7 @@ var Primitives = {
   "<=": evalNumericComparePrim,
   "=" : evalNumericComparePrim,
 
-  "and": function(args) {
+  "and": function(args, state, frame) {
     var vals = new Set
     if (args.every(function(arg) { return arg.contains(A_TRUE) }))
       vals = vals.add(A_TRUE)
@@ -480,7 +480,7 @@ var Primitives = {
     return popFrame(vals, state, frame)
   },
 
-  "or": function(args) {
+  "or": function(args, state, frame) {
     var vals = new Set
     if (args.some(function(arg) { return arg.contains(A_TRUE) }))
       vals = vals.add(A_TRUE)
@@ -489,7 +489,7 @@ var Primitives = {
     return popFrame(vals, state, frame)
   },
 
-  "not": function(args) {
+  "not": function(args, state, frame) {
     var vals = new Set
     if (args[0].contains(A_TRUE))
       vals = vals.add(A_FALSE)
