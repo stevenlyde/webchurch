@@ -53,6 +53,7 @@
       // }
       var evaluate = require("./evaluate").evaluate
       var analyze = require("./evaluate").analyze
+      var generate = require("./evaluate").generate
       var church_builtins = require("./church_builtins")
 
       function __updateJSOutput(str)
@@ -139,6 +140,23 @@ throw e
         document.getElementById("state_output").innerHTML = graph.stateToHTML(id)
       }
 
+      function __generateBayesianNetwork()
+      {
+        var church_code = editor.getValue()
+        store.set('code', church_code);
+        try
+        {
+             var res = generate(church_code)
+             var svg = Viz(res, "svg");
+             document.getElementById("graph_output").innerHTML = svg;
+        }
+        catch (e)
+        {
+          throw e
+          __updateExecOutput(JSON.stringify(e.message))
+        }
+      }
+
     </script>
 
     <button style="margin-top: 10px; font-size: 14pt" onclick="__runCode()">
@@ -147,6 +165,10 @@ throw e
 
     <button style="margin-top: 10px; font-size: 14pt" onclick="__analyzeCode()">
       Analyze
+    </button>
+
+    <button style="margin-top: 10px; font-size: 14pt" onclick="__generateBayesianNetwork()">
+      Generate Bayesian Network
     </button>
 
     <div>

@@ -14,6 +14,8 @@ var util = require('./util.js');
 var cfa = require('./church-pdcfa.js');
 var normalizer = require('./anormalize.js');
 
+var bnet = require('./bnet.js');
+
 
 // Note: escodegen zero-indexes columns, while JS evaluators and the Church
 // tokenizer uses 1-indexed columns.
@@ -65,6 +67,12 @@ function analyze(church_codestring) {
 	var dsg = cfa.generateDSG(exp);
 
 	return dsg;
+}
+
+function generate(church_codestring) {
+        var tokens = tokenize(church_codestring);
+        var church_ast = church_astify(tokens);
+	return bnet.generate(church_ast); 
 }
 
 function evaluate(church_codestring,precomp) {
@@ -172,5 +180,6 @@ function evaluate(church_codestring,precomp) {
 module.exports = {
 evaluate: evaluate,
 analyze: analyze,
+generate: generate,
 format_result: util.format_result
 };
