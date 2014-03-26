@@ -44,6 +44,10 @@ Integer.prototype.hashCode = function() {
   return this.v
 }
 
+Integer.prototype.toString = function() {
+  return this.v
+}
+
 //
 
 function Pair(a, d) {
@@ -116,6 +120,8 @@ Pop.prototype.hashCode = function() {
 
 function Frame() {}
 Frame.prototype.isTopFrame = false
+Frame.prototype.isLetFrame = false
+Frame.prototype.isInstallFrame = false
 
 function LetFrame(v, exp, env) {
   this.v = v
@@ -124,6 +130,7 @@ function LetFrame(v, exp, env) {
 }
 
 LetFrame.prototype = Object.create(Frame.prototype)
+LetFrame.prototype.isLetFrame = true
 
 LetFrame.prototype.equals = function(other) {
   if (!(other instanceof LetFrame))
@@ -142,6 +149,12 @@ LetFrame.prototype.hashCode = function() {
   return result 
 }
 
+function InstallFrame(v, exp, env) {
+  LetFrame.call(this, v, exp, env)
+}
+
+InstallFrame.prototype = Object.create(LetFrame.prototype)
+InstallFrame.prototype.isInstallFrame = true
 
 function TopFrame() {}
 
@@ -157,10 +170,11 @@ TopFrame.prototype.hashCode = function() {
 }
 
 
-function State(exp, env, store) {
+function State(exp, env, store, taint) {
   this.exp = exp
   this.env = env
   this.store = store
+  this.taint = taint
 }
 
 State.prototype.equals = function(other) {
@@ -168,7 +182,8 @@ State.prototype.equals = function(other) {
     return false
   return this.exp == other.exp &&
          this.env.equals(other.env) &&
-         this.store.equals(other.store)
+         this.store.equals(other.store) &&
+         this.taint.equals(other.taint)
 }
 
 State.prototype.hashCode = function() {
@@ -176,7 +191,8 @@ State.prototype.hashCode = function() {
   var result = 1
   result = prime * result + this.exp.id 
   result = prime * result + this.env.hashCode() 
-  result = prime * result + this.store.hashCode() 
+  result = prime * result + this.store.hashCode()
+  result = prime * result + this.taint.hashCode()
   return result
 }
 
@@ -207,9 +223,10 @@ Edge.prototype.hashCode = function() {
 
 }
 
+
 var Env = Map
 var Store = Map
-
+var Taint = Map
 
 // Abstract Addresses
 
@@ -425,37 +442,37 @@ PrimValue.prototype.hashCode = function() {
 }
 
 
-function evalNumericPrim(args, state, frame) {
+function evalNumericPrim(args, state, frame, callMap) {
   var vals = new Set
   if (args.every(function(arg) { return arg.contains(A_NUMBER) }))
     vals = new Set(A_NUMBER)
-  return popFrame(vals, state, frame)
+  return popFrame(vals, state, frame, callMap)
 }
 
-function evalNumericComparePrim(args, state, frame) {
+function evalNumericComparePrim(args, state, frame, callMap) {
   var vals = new Set
   if (args.every(function(arg) { return arg.contains(A_NUMBER) }))
     vals = new Set(A_TRUE, A_FALSE)
-  return popFrame(vals, state, frame)
+  return popFrame(vals, state, frame, callMap)
 }
 
-function fieldLookup(field, args, state, frame) {
+function fieldLookup(field, args, state, frame, callMap) {
   var vals = new Set
   args[0].forEach(function (loc) {
     var addr = new FieldAddress(loc, field)
     vals = vals.addAll(state.store.get(addr))
   })
-  return popFrame(vals, state, frame)
+  return popFrame(vals, state, frame, callMap)
 }
 
-function pairTest(test, args, state, frame) {
+function pairTest(test, args, state, frame, callMap) {
   var arg = args.toArray()
   var vals = new Set
   if (arg.some(test))
     vals = vals.add(A_TRUE)
   if (arg.some(function (d) { !test(d) }))
     vals = vals.add(A_FALSE)
-  return popFrame(vals, state, frame)
+  return popFrame(vals, state, frame, callMap)
 }
 
 var Primitives = {
@@ -471,63 +488,64 @@ var Primitives = {
   "<=": evalNumericComparePrim,
   "=" : evalNumericComparePrim,
 
-  "and": function(args, state, frame) {
+  "and": function(args, state, frame, callMap) {
     var vals = new Set
     if (args.every(function(arg) { return arg.contains(A_TRUE) }))
       vals = vals.add(A_TRUE)
     if (args.some(function(arg) { return arg.contains(A_FALSE) }))
       vals = vals.add(A_FALSE)
-    return popFrame(vals, state, frame)
+    return popFrame(vals, state, frame, callMap)
   },
 
-  "or": function(args, state, frame) {
+  "or": function(args, state, frame, callMap) {
     var vals = new Set
     if (args.some(function(arg) { return arg.contains(A_TRUE) }))
       vals = vals.add(A_TRUE)
     if (args.every(function(arg) { return arg.contains(A_FALSE) }))
       vals = vals.add(A_FALSE)
-    return popFrame(vals, state, frame)
+    return popFrame(vals, state, frame, callMap)
   },
 
-  "not": function(args, state, frame) {
+  "not": function(args, state, frame, callMap) {
     var vals = new Set
     if (args[0].contains(A_TRUE))
       vals = vals.add(A_FALSE)
     if (args[0].contains(A_FALSE))
       vals = vals.add(A_TRUE)
-    return popFrame(vals, state, frame)
+    return popFrame(vals, state, frame, callMap)
   },
 
-  "pair": function(args, state, frame) {
+  "pair": function(args, state, frame, callMap) {
     var loc = new PairLocation(state.exp.id)
     var aAddr = new FieldAddress(loc, "car")
     var dAddr = new FieldAddress(loc, "cdr")
     var newStore = updateStoreM(state.store, [aAddr, dAddr], args)
-    return popFrame(new Set(loc), state, frame, newStore)
+    // TODO: think about how to update the taint store in this scenario
+    return popFrame(new Set(loc), state, frame, callMap, newStore)
   },
 
-  "first": function(args, state, frame) {
-    return fieldLookup("car", args, state, frame)
+  "first": function(args, state, frame, callMap) {
+    return fieldLookup("car", args, state, frame, callMap)
   },
 
-  "rest": function(args, state, frame) {
-    return fieldLookup("cdr", args, state, frame)
+  "rest": function(args, state, frame, callMap) {
+    return fieldLookup("cdr", args, state, frame, callMap)
   },
 
-  "null?": function(args, state, frame) {
-    return pairTest(function (d) { return d instanceof EmptyList }, args, state, frame) 
+  "null?": function(args, state, frame, callMap) {
+    return pairTest(function (d) { return d instanceof EmptyList }, args, state, frame, callMap) 
   },
 
-  "pair?": function(args, state, frame) {
-    return pairTest(function (d) { return d instanceof PairLocation }, args, state, frame)
+  "pair?": function(args, state, frame, callMap) {
+    return pairTest(function (d) { return d instanceof PairLocation }, args, state, frame, callMap)
   },
 
-  "eq?": function(args, state, frame) {
-    return popFrame(new Set(A_TRUE, A_FALSE), state, frame)
+  "eq?": function(args, state, frame, callMap) {
+    return popFrame(new Set(A_TRUE, A_FALSE), state, frame, callMap)
   },
 
-  "equal?": function(args, state, frame) {
-    return popFrame(new Set(A_TRUE, A_FALSE), state, frame)
+  "equal?": function(args, state, frame, callMap) {
+    return popFrame(new Set(A_TRUE, A_FALSE), state, frame, callMap)
   },
 
   "round": evalNumericPrim,
@@ -536,9 +554,13 @@ var Primitives = {
   "log":   evalNumericPrim,
   "pow":   evalNumericPrim,
 
-  "flip": function(args, state, frame) {
-    return popFrame(new Set(A_TRUE, A_FALSE), state, frame)
-  }
+  "flip": function(args, state, frame, callMap) {
+    return popFrame(new Set(A_TRUE, A_FALSE), state, frame, callMap)
+  },
+
+  "beta": function(args, state, frame, callMap) {
+    return popFrame(new Set(A_NUMBER), state, frame, callMap)
+  },
 
 }
 
@@ -609,7 +631,7 @@ function isNumber(exp) { return util.is_number(exp.text) }
 function numberValue(exp) { return parseFloat(exp.text) } 
 function isString(exp) { return exp.text && util.is_string(exp.text) }
 function stringValue(exp) { return exp.text.slice(1, -1) }
-function isRef(exp) { return !exp.children }
+function isRef(exp) { return isLeaf(exp) && !isBoolean(exp) && !isNumber(exp) && !isString(exp) }
 function refName(exp) { return exp.text}
 
 
@@ -641,7 +663,7 @@ function evalQuote(exp) {
 
 
 function isAtomic(exp) {
-  return isLambda(exp) || isQuote(exp) || isRef(exp)
+  return isLambda(exp) || isQuote(exp) || isLeaf(exp)
 }
 
 function atomicEval(exp, env, store) {
@@ -672,6 +694,19 @@ function atomicEval(exp, env, store) {
   }
 }
 
+function taintEval(exp, env, taint) {
+  if (isLambda(exp) || isQuote(exp) || isBoolean(exp) || isNumber(exp) || isString(exp) || isPrim(exp)) {
+    return new Set
+  }
+  else if (isRef(exp)) {
+    var addr = env.get(refName(exp))
+    return taint.get(addr)
+  }
+  else {
+    throw new Error("non-atomic expression")
+  }
+}
+
 
 function updateEnv(env, variable, address) {
   return env.set(variable, address)
@@ -696,16 +731,29 @@ function updateStoreM(store, addrs, vals) {
   }, store);
 }
 
-function popFrame(vals, state, frame, store) {
+
+function getCallExpressions(v, callMap) {
+  var e = callMap[v]
+  return e ? new Set(new Integer(e)) : new Set
+}
+
+
+function popFrame(vals, state, frame, callMap, store) {
   store = store === undefined ? state.store : store
   if (frame.isTopFrame) {
     return undefined
   }
-  else {
-    var addr = alloc(frame.v, state)
-    var newEnv = updateEnv(frame.env, frame.v, addr)
+  else if (frame.isLetFrame) {
+    var allocate = !frame.isInstallFrame
+    var addr = allocate ? alloc(frame.v, state) : frame.env.get(frame.v)
+    var newEnv = allocate ? updateEnv(frame.env, frame.v, addr) : frame.env
+
     var newStore = updateStore(store, addr, vals)
-    return [new State(frame.exp, newEnv, newStore), new Pop(frame)]
+    var newTaint = updateStore(state.taint, addr, getCallExpressions(frame.v, callMap))
+    return [new State(frame.exp, newEnv, newStore, newTaint), new Pop(frame)]
+  }
+  else {
+    throw new Error("unknown frame type")
   }
 }
 
@@ -768,8 +816,9 @@ function gc(store, env, frames) {
 
 // Step function
 
-function nextgc(state, frame, possibleFrames) {
-  var pairs = next(state, frame)
+function nextgc(state, frame, possibleFrames, callMap) {
+  // TODO: the taint store should probably be garbage collected as well
+  var pairs = next(state, frame, callMap)
   pairs.forEach(function(pair) {
     var state = pair[0]
     state.store = gc(state.store, state.env, possibleFrames)
@@ -777,43 +826,48 @@ function nextgc(state, frame, possibleFrames) {
   return pairs
 }
 
-function next(state, frame) {
+function next(state, frame, callMap) {
   var exp = state.exp
   var env = state.env
   var store = state.store
+  var taint = state.taint
 
   if (isAtomic(exp)) {
-    var succ = popFrame(atomicEval(exp, env, store), state, frame)
+    var succ = popFrame(atomicEval(exp, env, store, taint), state, frame, callMap)
     return succ ? [succ] : [] 
   }
   else if (isLetExp(exp)) {
     var v = letVariable(exp)
     var call = letValue(exp)
     var body = letBody(exp)
-    return [[new State(call, env, store), new Push(new LetFrame(v, body, env))]]
+    return [[new State(call, env, store, taint), new Push(new LetFrame(v, body, env))]]
   }
   else if (isLetVoidExp(exp)) {
     var vs = letVoidVars(exp)
     var addrs = vs.map(function(v) { return alloc(v, state) })
     var newEnv = updateEnvM(env, vs, addrs) 
     var body = letBody(exp)
-    return [[new State(body, newEnv, store), new Eps]]
+    return [[new State(body, newEnv, store, taint), new Eps]]
   }
   else if (isInstallValueExp(exp)) {
     var v = letVariable(exp)
     var value = letValue(exp)
     var body = letBody(exp)
+/*
     var newStore = updateStore(store, env.get(v), atomicEval(value, env, store))
-    return [[new State(body, env, newStore), new Eps]]
+    var newTaint = updateStore(taint, env.get(v), taintEval(value, env, taint)) 
+    return [[new State(body, env, newStore, newTaint), new Eps]]
+*/
+    return [[new State(value, env, store, taint), new Push(new InstallFrame(v, body, env))]]
   }
   else if (isIfExp(exp)) {
     var test = atomicEval(ifTestExp(exp), env, store)
     var succs = []
     if (test.contains(A_TRUE)) {
-      succs.push([new State(ifThenExp(exp), env, store), new Eps])
+      succs.push([new State(ifThenExp(exp), env, store, taint), new Eps])
     }
     if (test.contains(A_FALSE)) {
-      succs.push([new State(ifElseExp(exp), env, store), new Eps])
+      succs.push([new State(ifElseExp(exp), env, store, taint), new Eps])
     }
     return succs
   }
@@ -823,19 +877,21 @@ function next(state, frame) {
 
     var procs = atomicEval(f, env, store).toArray()
     var argvals = args.map(function(arg) { return atomicEval(arg, env, store) })
+    var argtaints = args.map(function(arg) { return taintEval(arg, env, taint) })
     var addrs = args.map(function(a) { return alloc(a, state) }) 
 
     var succs = procs.map(function(proc) {
       if (proc instanceof PrimValue) {
         var evaluator = Primitives[proc.name]
-        return evaluator(argvals, state, frame)
+        return evaluator(argvals, state, frame, callMap)
       }
       else if (proc instanceof Closure) {
         if (proc.params.length != argvals.length) return undefined
         var addrs = proc.params.map(function(param) { return alloc(param, state) })
         var newEnv = updateEnvM(proc.env, proc.params, addrs)
         var newStore = updateStoreM(store, addrs, argvals)
-        return [new State(proc.body, newEnv, newStore), new Eps]
+        var newTaint = updateStoreM(taint, addr, argtaints) 
+        return [new State(proc.body, newEnv, newStore, newTaint), new Eps]
       }
       else {
         throw new Error("application not a procedure")
@@ -1027,23 +1083,41 @@ function DSG(s) {
       html += "</tr>"
     })
     html += "</table>"
+
+    html += "<h3>Taint Store: </h3>"
+
+    html += "<table>"
+    s.taint.forEach(function(addr, vals) {
+      html += "<tr>"
+      html += "<td>" + addr + "</td>"
+      html += "<td>{" + vals.toArray().reduce(function(vals, val) { return vals + ", " + val }) + "}</td>"
+      html += "</tr>"
+    })
+    html += "</table>"
     
     return html
   }
+
+  this.forEachState = function(f) {
+    ids.forEach(function(k, v) { f(k) })
+  }
+
 }
 
 
-
 function inject(exp) {
-  return new State(exp, new Env, new Store)
+  return new State(exp, new Env, new Store, new Taint)
 }
 
 
 function generateDSG(exp) {
+
   var s = inject(exp)
 
   var toVisit = new Set(s)
   var dsg = new DSG(s)
+
+  var callMap = getCallMap(exp)
 
   while (!toVisit.isEmpty()) {
     var edges = []
@@ -1051,7 +1125,7 @@ function generateDSG(exp) {
     toVisit.forEach(function(s) {
       var possibleFrames = dsg.possibleFrames(s)
       dsg.topFrames(s).forEach(function(f) {
-        nextgc(s, f, possibleFrames).forEach(function (n) {
+        nextgc(s, f, possibleFrames, callMap).forEach(function (n) {
           edges.push(new Edge(s, n[1], n[0]))
         })
       })
@@ -1060,8 +1134,135 @@ function generateDSG(exp) {
     toVisit = dsg.newEdges(edges)
   }
 
+  conjugateCollapse(exp, dsg)
   return dsg
 }
+
+
+// Taint Analysis
+
+function expFold(exp, value, callback) {
+  if (isLambda(exp)) {
+    var body = lambdaBody(exp)
+    if (callback.visitLambdaExp)
+      value = callback.visitLambdaExp(value, exp, lambdaParams(exp), body)
+    return expFold(body, value, callback)
+  }
+  else if (isAtomic(exp)) {
+    if (callback.visitAtomicExp)
+      value = callback.visitAtomicExp(value, exp)
+    return value
+  }
+  else if (isLetExp(exp)) {
+    var call = letValue(exp)
+    var body = letBody(exp)
+    if (callback.visitLetExp)
+      value = callback.visitLetExp(value, exp, letVariable(exp), call, body)
+    value = expFold(call, value, callback)
+    return expFold(body, value, callback)
+  }
+  else if (isLetVoidExp(exp)) {
+    var body = letBody(exp)
+    if (callback.visitLetVoidExp)
+      value = callback.visitLetVoidExp(value, exp, letVoidVars(exp), body)
+    return expFold(body, value, callback)
+  }
+  else if (isInstallValueExp(exp)) {
+    var call = letValue(exp)
+    var body = letBody(exp)
+    if (callback.visitInstallValueExp)
+      value = callback.visitInstallValueExp(value, exp, letVariable(exp), call, body)
+    value = expFold(call, value, callback)
+    return expFold(body, value, callback)    
+  }
+  else if (isIfExp(exp)) {
+    var testExp = ifTestExp(exp)
+    var thenExp = ifThenExp(exp)
+    var elseExp = ifElseExp(exp)
+    if (callback.visitIfExp)
+      value = callback.visitIfExp(value, exp, testExp, thenExp, elseExp)
+    value = expFold(testExp, value, callback)
+    value = expFold(thenExp, value, callback)
+    return expFold(elseExp, value, callback)
+  }
+  else if (isApplication(exp)) {
+    var fun = appFunction(exp)
+    var args = appArgs(exp)
+    if (callback.visitAppExp)
+      value = callback.visitAppExp(value, exp, fun, args)
+    value = expFold(fun, value, callback)
+    args.forEach(function (arg) { value = expFold(arg, value, callback) })
+    return value
+  }
+  else {
+    throw new Error("unexpected expression")
+  }
+}
+
+
+function getCallMap(exp) {
+  function mapCall(value, exp, id, call, body) {
+    value[id] = call.id
+    return value
+  }
+  return expFold(exp, {}, { visitLetExp: mapCall, visitInstallValueExp: mapCall })
+}
+
+
+
+function conjugateCollapse(exp, dsg) {
+
+  var betas = expFold(exp, new Set, {
+    visitAppExp: function(value, exp, fun, args) {
+      if (fun.text === "beta")
+        value = value.add(new Integer(exp.id))
+      return value
+    }
+  })
+
+  var flips = expFold(exp, [], {
+    visitAppExp: function(value, exp, fun, args) {
+      if (fun.text === "flip" && args.length > 0 && isRef(args[0])) { 
+        value.push([exp.id, refName(args[0])])
+      }
+      return value
+    }
+  })
+
+  var taint = new Taint
+  dsg.forEachState(function(s) {
+    s.taint.forEach(function(addr, val) {
+      // TODO: might need to consider other types of addresses
+      if (addr.variable) {
+        var old = taint.get(addr.variable)
+        var merged = old ? old.addAll(val) : val
+        taint = taint.set(addr.variable, merged)
+      }
+    })
+  })
+
+  flips.forEach(function(p) {
+    var flipId = p[0]
+    var parameter = p[1]
+
+    var values = taint.get(parameter)
+    if (values.size() === 1) {
+      var flowsElsewhere = false
+      taint.forEach(function(k, v) {
+        if (!flowsElsewhere && k !== parameter)
+          flowsElsewhere = values.subsetOf(v)
+      })
+
+      var taintId
+      values.forEach(function(v) { taintId = v })
+      if (betas.contains(taintId))
+        console.log(flipId + " and " + taintId + " are conjugate collapsable") 
+    }
+  })
+
+}
+
+
 
 exports.generateDSG = generateDSG
 
@@ -1069,4 +1270,5 @@ exports.generateDSG = generateDSG
 //   Do I need to add the top frames of epsilon predecessors or shouldn't they already be added
 //   What if we have an atomic expression with an empty environment?
 //   Do I really just want to pass the top frame or the actual continuation?
+
 

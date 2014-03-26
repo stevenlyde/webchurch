@@ -60,7 +60,7 @@ function normalizeDec(dec, rest) {
   if (isDefine(dec)) {
     var v = copy(dec.children[1])
     var exp = dec.children[2]
-    return normalizeName(exp, function(exp) {
+    return normalize(exp, function(exp) {
       return {children: [{text: "install-value"}, {children: [v, exp]}, normalizeBody(rest)]}
     })
   }
