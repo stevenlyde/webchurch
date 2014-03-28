@@ -570,7 +570,9 @@ function isPrim(exp) {
 
 
 function isApplication(exp) {
-  return exp.children && exp.children.length > 0 && exp.children[0].text != "let" && exp.children[0].text != "lambda"
+  return exp.children && exp.children.length > 0 &&
+         !isLetExp(exp) && !isLetVoidExp(exp) && !isInstallValueExp(exp) &&
+         !isIfExp(exp) && !isLambda(exp) && !isQuote(exp) 
 }
 function appFunction(exp) { return exp.children[0] }
 function appArgs(exp) { return exp.children.slice(1) }
@@ -890,7 +892,7 @@ function next(state, frame, callMap) {
         var addrs = proc.params.map(function(param) { return alloc(param, state) })
         var newEnv = updateEnvM(proc.env, proc.params, addrs)
         var newStore = updateStoreM(store, addrs, argvals)
-        var newTaint = updateStoreM(taint, addr, argtaints) 
+        var newTaint = updateStoreM(taint, addrs, argtaints) 
         return [new State(proc.body, newEnv, newStore, newTaint), new Eps]
       }
       else {
@@ -1220,48 +1222,61 @@ function conjugateCollapse(exp, dsg) {
     }
   })
 
-  var flips = expFold(exp, [], {
-    visitAppExp: function(value, exp, fun, args) {
-      if (fun.text === "flip" && args.length > 0 && isRef(args[0])) { 
-        value.push([exp.id, refName(args[0])])
-      }
-      return value
-    }
-  })
+  var candidates = new Set
+  var disqualified = new Set
 
-  var taint = new Taint
-  dsg.forEachState(function(s) {
-    s.taint.forEach(function(addr, val) {
-      // TODO: might need to consider other types of addresses
-      if (addr.variable) {
-        var old = taint.get(addr.variable)
-        var merged = old ? old.addAll(val) : val
-        taint = taint.set(addr.variable, merged)
-      }
+  var flipSingleton = new Set(new PrimValue("flip"))
+
+  function isFlipSingleton(s) {
+    var fun = appFunction(s.exp)
+    var args = appArgs(s.exp)
+    return args.length == 1 && flipSingleton.equals(atomicEval(fun, s.env, s.store))
+  }
+
+  function singletonBetaArg(s) {
+    var arg = appArgs(s.exp)[0]
+    if (isRef(arg)) {
+      var taints = s.taint.get(s.env.get(refName(arg)))
+      if (taints.size() == 1 && taints.subsetOf(betas))
+        return taints
+    }
+    return new Set
+  }
+
+  function primitiveInFunctionPosition(s, f) {
+    var primitive = false
+    atomicEval(appFunction(s.exp), s.env, s.store).forEach(function(v) {
+      if (v instanceof PrimValue) primitive = true
     })
+    return primitive
+  }
+
+  function betasInArgumentPosition(s, args) {
+    return args.reduce(function(acc, arg) {
+      return isRef(arg) ? acc.addAll(s.taint.get(s.env.get(refName(arg)))) : acc
+    }, new Set)
+  }
+
+  dsg.forEachState(function(s) {
+    if (isApplication(s.exp)) {
+      var candidate
+      if (isFlipSingleton(s) && !(candidate = singletonBetaArg(s)).isEmpty()) {
+        candidate.forEach(function(c) {
+          candidates = candidates.add(new Pair(new Integer(s.exp.id), c))
+        })
+      }
+      else if (primitiveInFunctionPosition(s, appFunction(s.exp))) {
+        disqualified = disqualified.addAll(betasInArgumentPosition(s, appArgs(s.exp)))
+      }
+    }
   })
 
-  flips.forEach(function(p) {
-    var flipId = p[0]
-    var parameter = p[1]
-
-    var values = taint.get(parameter)
-    if (values.size() === 1) {
-      var flowsElsewhere = false
-      taint.forEach(function(k, v) {
-        if (!flowsElsewhere && k !== parameter)
-          flowsElsewhere = values.subsetOf(v)
-      })
-
-      var taintId
-      values.forEach(function(v) { taintId = v })
-      if (betas.contains(taintId))
-        console.log(flipId + " and " + taintId + " are conjugate collapsable") 
-    }
+  candidates.forEach(function(candidate) {
+    if (!disqualified.contains(candidate.d))
+      console.log(candidate.a + " and " + candidate.d + " are conjugate collapsable")
   })
 
 }
-
 
 
 exports.generateDSG = generateDSG
